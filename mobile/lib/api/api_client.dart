@@ -48,7 +48,7 @@ class ZbiorkomApiClient {
   Future<List<City>> loadCities() async {
     Response<dynamic> response;
     try {
-      response = await _dio.get<dynamic>('/api6');
+      response = await _dio.getUri<dynamic>(ApiConfig.api6Uri());
     } catch (_) {
       final online = await isOnline();
       throw BackendException(

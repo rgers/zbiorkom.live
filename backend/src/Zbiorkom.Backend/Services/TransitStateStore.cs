@@ -299,7 +299,7 @@ public sealed class TransitStateStore
             Name: name,
             Location: [lon, lat],
             Timezone: "Europe/Warsaw",
-            Zoom: 13.0,
+            Zoom: 15.0,
             Description: description,
             Virtual: false,
             Agencies: new Dictionary<string, CityAgencyDto>

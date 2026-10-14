@@ -71,7 +71,7 @@ class City {
     required this.name,
     required this.location,
     required this.timezone,
-    this.zoom = 13.0,
+    this.zoom = 16.0,
     this.description,
     this.showNewTag = false,
     this.disableBrigades = false,
@@ -124,7 +124,7 @@ class City {
       timezone: (json['timezone'] as String?)?.isNotEmpty == true
           ? json['timezone'] as String
           : defaultTimezone,
-      zoom: (json['zoom'] as num?)?.toDouble() ?? 13.0,
+      zoom: (json['zoom'] as num?)?.toDouble() ?? 16.0,
       description: json['description'] as String?,
       showNewTag: json['showNewTag'] == true,
       disableBrigades: json['disableBrigades'] == true,

@@ -66,7 +66,8 @@ class _CityMapScreenState extends ConsumerState<CityMapScreen> {
   List<LatLng> _activeTripPolyline = const [];
   LatLng? _userLocation;
   String? _currentBoundsStr;
-  double _currentZoom = 13.0;
+  double _currentZoom = 16.0;
+  bool _mapReady = false;
 
   @override
   void initState() {
@@ -81,27 +82,47 @@ class _CityMapScreenState extends ConsumerState<CityMapScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.cityId != widget.cityId) {
       _activeTripPolyline = const [];
-      _initializeCityCamera();
+      _initializeCityCamera(forceCityCenter: true);
     }
   }
 
-  void _initializeCityCamera() {
+  void _initializeCityCamera({bool forceCityCenter = false}) {
     final bootstrap = ref.read(backendBootstrapProvider);
     final settings = ref.read(appSettingsProvider);
     final city = bootstrap.findCity(widget.cityId);
 
-    final initialCenter =
-        (settings.moveToLastLocation && settings.lastMapCenter != null)
+    final useSavedLocation =
+        !forceCityCenter &&
+        settings.moveToLastLocation &&
+        settings.lastMapCenter != null &&
+        settings.selectedCityId == widget.cityId;
+
+    final initialCenter = useSavedLocation
         ? settings.lastMapCenter!
         : (city?.location ?? City.defaultLocation);
     final initialZoom =
-        (settings.moveToLastLocation && settings.lastMapZoom != null)
+        (useSavedLocation && settings.lastMapZoom != null)
         ? settings.lastMapZoom!
-        : (city?.zoom ?? 13.0);
+        : (city?.zoom ?? 16.0);
 
     _currentZoom = initialZoom;
-    _mapController.move(initialCenter, initialZoom);
-    _updateMapStreamFromBounds();
+    if (_mapReady) {
+      try {
+        _mapController.move(initialCenter, initialZoom);
+      } catch (_) {}
+      _updateMapStreamFromBounds();
+    } else {
+      // Fallback bounds around initialCenter before FlutterMap layout completes
+      const latDelta = 0.015;
+      const lonDelta = 0.025;
+      _currentBoundsStr = [
+        (initialCenter.longitude - lonDelta).toStringAsFixed(5),
+        (initialCenter.latitude - latDelta).toStringAsFixed(5),
+        (initialCenter.longitude + lonDelta).toStringAsFixed(5),
+        (initialCenter.latitude + latDelta).toStringAsFixed(5),
+      ].join(',');
+      _reconnectMapStream();
+    }
   }
 
   void _updateMapStreamFromBounds() {
@@ -139,8 +160,9 @@ class _CityMapScreenState extends ConsumerState<CityMapScreen> {
         ? '?${Uri(queryParameters: queryParams).query}'
         : '';
 
-    final endpoint =
-        'mapFeatures/${_currentZoom.toStringAsFixed(2)}/$_currentBoundsStr/stream$query';
+    final endpoint = filter.isActive
+        ? 'mapFeatures/0/0,0,0,0/stream$query'
+        : 'mapFeatures/${_currentZoom.toStringAsFixed(2)}/$_currentBoundsStr/stream$query';
 
     _mapStreamController?.dispose();
     _mapStreamController =
@@ -286,13 +308,16 @@ class _CityMapScreenState extends ConsumerState<CityMapScreen> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: City.defaultLocation,
-              initialZoom: 13.0,
+              initialZoom: 16.0,
               minZoom: 5.0,
               maxZoom: 19.0,
               interactionOptions: const InteractionOptions(
                 flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
               ),
-              onMapReady: _updateMapStreamFromBounds,
+              onMapReady: () {
+                _mapReady = true;
+                _initializeCityCamera();
+              },
               onPositionChanged: (camera, hasGesture) {
                 if (!hasGesture) return;
                 _cameraDebounce?.cancel();
@@ -353,14 +378,37 @@ class _CityMapScreenState extends ConsumerState<CityMapScreen> {
                   }).toList(),
                 ),
               if (useDots)
-                CircleLayer(
-                  circles: dots.map((dot) {
-                    return CircleMarker(
+                MarkerLayer(
+                  markers: dots.map((dot) {
+                    return Marker(
                       point: dot.location,
-                      radius: 4.5,
-                      color: TransitTools.parseHexColor(dot.routeColor),
-                      borderStrokeWidth: 1,
-                      borderColor: Colors.black54,
+                      width: 14,
+                      height: 14,
+                      child: GestureDetector(
+                        onTap: () {
+                          _mapController.move(
+                            dot.location,
+                            _currentZoom < 15.0 ? 15.5 : _currentZoom + 1.5,
+                          );
+                          _updateMapStreamFromBounds();
+                        },
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: TransitTools.parseHexColor(dot.routeColor),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white,
+                              width: 1.5,
+                            ),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black38,
+                                blurRadius: 2,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     );
                   }).toList(),
                 )

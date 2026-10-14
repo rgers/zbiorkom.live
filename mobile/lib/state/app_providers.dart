@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
+import '../core/api_config.dart';
 
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('sharedPreferencesProvider must be overridden');
@@ -24,6 +25,7 @@ class AppSettingsState {
     required this.showBrigadeOnMarker,
     required this.showFleetOnMarker,
     required this.useDarkTiles,
+    required this.apiBaseUrl,
     this.lastMapCenter,
     this.lastMapZoom,
   });
@@ -35,6 +37,7 @@ class AppSettingsState {
   final bool showBrigadeOnMarker;
   final bool showFleetOnMarker;
   final bool useDarkTiles;
+  final String apiBaseUrl;
   final LatLng? lastMapCenter;
   final double? lastMapZoom;
 
@@ -52,8 +55,10 @@ class AppSettingsState {
     bool? showBrigadeOnMarker,
     bool? showFleetOnMarker,
     bool? useDarkTiles,
+    String? apiBaseUrl,
     LatLng? lastMapCenter,
     double? lastMapZoom,
+    bool clearLastMapPosition = false,
   }) {
     return AppSettingsState(
       languageCode: languageCode ?? this.languageCode,
@@ -63,8 +68,13 @@ class AppSettingsState {
       showBrigadeOnMarker: showBrigadeOnMarker ?? this.showBrigadeOnMarker,
       showFleetOnMarker: showFleetOnMarker ?? this.showFleetOnMarker,
       useDarkTiles: useDarkTiles ?? this.useDarkTiles,
-      lastMapCenter: lastMapCenter ?? this.lastMapCenter,
-      lastMapZoom: lastMapZoom ?? this.lastMapZoom,
+      apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
+      lastMapCenter: clearLastMapPosition
+          ? null
+          : (lastMapCenter ?? this.lastMapCenter),
+      lastMapZoom: clearLastMapPosition
+          ? null
+          : (lastMapZoom ?? this.lastMapZoom),
     );
   }
 }
@@ -78,14 +88,17 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     final lat = prefs.getDouble('lastLat');
     final lon = prefs.getDouble('lastLon');
     final zoom = prefs.getDouble('lastZoom');
+    final savedApiUrl = prefs.getString('apiBaseUrl') ?? ApiConfig.baseUrl;
+    ApiConfig.setRuntimeBaseUrl(savedApiUrl);
     return AppSettingsState(
       languageCode: prefs.getString('language') ?? 'pl',
       themeColorHex: prefs.getString('themeColor') ?? '#276b2b',
       selectedCityId: prefs.getString('city'),
-      moveToLastLocation: prefs.getBool('moveToLastLocation') ?? true,
+      moveToLastLocation: prefs.getBool('moveToLastLocation') ?? false,
       showBrigadeOnMarker: prefs.getBool('showBrigade') ?? true,
       showFleetOnMarker: prefs.getBool('showFleet') ?? false,
       useDarkTiles: prefs.getBool('useDarkTiles') ?? true,
+      apiBaseUrl: savedApiUrl,
       lastMapCenter: (lat != null && lon != null) ? LatLng(lat, lon) : null,
       lastMapZoom: zoom,
     );
@@ -102,8 +115,24 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
   }
 
   Future<void> setSelectedCity(String cityId) async {
+    final changed = state.selectedCityId != cityId;
     await _prefs.setString('city', cityId);
-    state = state.copyWith(selectedCityId: cityId);
+    if (changed) {
+      await _prefs.remove('lastLat');
+      await _prefs.remove('lastLon');
+      await _prefs.remove('lastZoom');
+    }
+    state = state.copyWith(
+      selectedCityId: cityId,
+      clearLastMapPosition: changed,
+    );
+  }
+
+  Future<void> setApiBaseUrl(String url) async {
+    final cleaned = url.trim().isEmpty ? ApiConfig.baseUrl : url.trim();
+    await _prefs.setString('apiBaseUrl', cleaned);
+    ApiConfig.setRuntimeBaseUrl(cleaned);
+    state = state.copyWith(apiBaseUrl: cleaned);
   }
 
   Future<void> setMoveToLastLocation(bool enabled) async {

@@ -110,6 +110,49 @@ class SettingsScreen extends ConsumerWidget {
             onChanged: notifier.setMoveToLastLocation,
             title: Text(strings.moveToLastLocation),
           ),
+          const SizedBox(height: 20),
+          Text(
+            strings.isPolish ? 'Serwer API (/api6)' : 'API Server (/api6)',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: RadioGroup<String>(
+              groupValue: settings.apiBaseUrl,
+              onChanged: (val) async {
+                if (val == null) return;
+                await notifier.setApiBaseUrl(val);
+                await ref.read(backendBootstrapProvider.notifier).load();
+              },
+              child: Column(
+                children: [
+                  const RadioListTile<String>(
+                    value: 'https://api.zbiorkom.live',
+                    title: Text('zbiorkom.live (Cloud)'),
+                    subtitle: Text('https://api.zbiorkom.live'),
+                  ),
+                  RadioListTile<String>(
+                    value: 'http://localhost:8005',
+                    title: Text(
+                      strings.isPolish
+                          ? 'Lokalny backend .NET 10 (iOS / Web / Desktop)'
+                          : 'Local .NET 10 Backend (iOS / Web / Desktop)',
+                    ),
+                    subtitle: const Text('http://localhost:8005'),
+                  ),
+                  RadioListTile<String>(
+                    value: 'http://10.0.2.2:8005',
+                    title: Text(
+                      strings.isPolish
+                          ? 'Lokalny backend .NET 10 (Emulator Android)'
+                          : 'Local .NET 10 Backend (Android Emulator)',
+                    ),
+                    subtitle: const Text('http://10.0.2.2:8005'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );

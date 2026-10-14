@@ -156,7 +156,7 @@ class SseSubscriptionController<TData, TInitial>
 
     _emit(_snapshot.copyWith(isLoading: true, clearError: true));
 
-    final uri = Uri.parse('${ApiConfig.baseUrl}/api6/$city/$endpoint');
+    final uri = Uri.parse('${ApiConfig.effectiveBaseUrl}/api6/$city/$endpoint');
     final client = _clientFactory();
     _activeClient = client;
 
