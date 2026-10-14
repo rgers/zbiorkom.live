@@ -128,8 +128,10 @@ class SseSubscriptionController<TData, TInitial>
   bool _disposed = false;
   int _retryCount = 0;
 
+  // NB: must not be `const` — a const object in a generic context reifies its
+  // type arguments as `Never`, which makes every `copyWith` type-check fail.
   SseStreamSnapshot<TData, TInitial> _snapshot =
-      const SseStreamSnapshot(isLoading: true);
+      SseStreamSnapshot<TData, TInitial>(isLoading: true);
 
   void start() {
     if (_disposed) return;
