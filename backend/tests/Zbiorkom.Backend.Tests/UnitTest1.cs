@@ -25,9 +25,10 @@ public sealed class Api6BackendTests(WebApplicationFactory<Program> factory)
 
         Assert.Equal("dotnet10-lts", doc.RootElement.GetProperty("hash").GetString());
         var cities = doc.RootElement.GetProperty("cities");
-        Assert.True(cities.GetArrayLength() >= 5);
+        Assert.True(cities.GetArrayLength() >= 6);
         Assert.Contains(cities.EnumerateArray(), c => c.GetProperty("id").GetString() == "warsaw");
         Assert.Contains(cities.EnumerateArray(), c => c.GetProperty("id").GetString() == "krakow");
+        Assert.Contains(cities.EnumerateArray(), c => c.GetProperty("id").GetString() == "grodzisk");
     }
 
     [Fact]
@@ -173,5 +174,90 @@ public sealed class Api6BackendTests(WebApplicationFactory<Program> factory)
         var count = GtfsFeedParser.LoadVehiclePositionsProtobufIntoCity(pbMs, cityData);
         Assert.Equal(1, count);
         Assert.True(cityData.Vehicles.ContainsKey("bus:gtfs_9901"));
+    }
+
+    [Fact]
+    public void KiedyPrzyjedzieAdapter_ParsesGpaStopsDeparturesAndLiveTripExecution()
+    {
+        var store = new TransitStateStore();
+        var gpaCity = store.GetCity("grodzisk")!;
+
+        const string stopsJson = """
+        {
+          "stops": [
+            ["538522:585919", 1204101, "Grodzisk Maz. Dw. PKP", 20622327, 52109692, 0, 0, 0],
+            ["538483:585844", 1200101, "Adamowizna Królicza", 20632442, 52072347, 0, 0, 0]
+          ]
+        }
+        """;
+
+        var loadedStops = GtfsFeedParser.LoadKiedyPrzyjedzieStopsIntoCity(stopsJson, gpaCity);
+        Assert.Equal(2, loadedStops);
+        Assert.Equal(20.622327, gpaCity.Stops["538522:585919"].Longitude);
+        Assert.Equal(52.109692, gpaCity.Stops["538522:585919"].Latitude);
+
+        const string departuresJson = """
+        {
+          "status": "ok",
+          "departures": [
+            {
+              "designator": 1200101,
+              "rows": [
+                {
+                  "time": "6 min",
+                  "is_estimated": true,
+                  "direction_id": 585844000,
+                  "line_name": "31",
+                  "trip_id": 49154351,
+                  "trip_execution_id": "A 312 (31):739903:11",
+                  "trip_index": 29
+                }
+              ]
+            }
+          ],
+          "directions": {
+            "585844000": "Grodzisk Maz. Dw. PKP"
+          }
+        }
+        """;
+
+        var activeTrips = GtfsFeedParser.ParseKiedyPrzyjedzieDepartures(departuresJson);
+        Assert.Single(activeTrips);
+        Assert.Equal("31", activeTrips[0].LineName);
+        Assert.Equal("A 312 (31):739903:11", activeTrips[0].TripExecutionId);
+        Assert.Equal("QSAzMTIgKDMxKTo3Mzk5MDM6MTE=", GtfsFeedParser.EncodeTripExecutionIdBase64(activeTrips[0].TripExecutionId));
+
+        const string tripExecutionJson = """
+        {
+          "vehicle": { "lon": 20.649946, "lat": 52.045828 },
+          "estimated": true,
+          "vehicle_trip_index": 1,
+          "trip": {
+            "line": "31",
+            "direction": "Grodzisk Maz. Dw. PKP",
+            "times": [
+              { "stop_name": "Adamowizna Królicza", "designator": 1200101, "place_id": "538483:585844", "departure_time": "19:20", "index": 0 },
+              { "stop_name": "Grodzisk Maz. Dw. PKP", "designator": 1204101, "place_id": "538522:585919", "departure_time": "19:35", "index": 1 }
+            ]
+          }
+        }
+        """;
+
+        var ok = GtfsFeedParser.LoadKiedyPrzyjedzieTripExecutionIntoCity(
+            tripExecutionJson,
+            activeTrips[0].TripExecutionId,
+            activeTrips[0].LineName,
+            activeTrips[0].Direction,
+            "GPA",
+            gpaCity);
+
+        Assert.True(ok);
+        Assert.True(gpaCity.Vehicles.TryGetValue("bus:gpa_312", out var vehicle));
+        Assert.Equal(20.649946, vehicle!.Longitude);
+        Assert.Equal(52.045828, vehicle.Latitude);
+        Assert.Equal("312", vehicle.Brigade);
+        Assert.True(gpaCity.Trips.ContainsKey(vehicle.TripId));
+        Assert.True(gpaCity.TripItineraries.ContainsKey(vehicle.TripId));
+        Assert.True(gpaCity.TripEncodedShapes.ContainsKey(vehicle.TripId));
     }
 }

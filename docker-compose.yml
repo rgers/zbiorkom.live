@@ -20,4 +20,10 @@ services:
             GtfsFeeds__1__AgencyId: ZTP
             GtfsFeeds__1__StaticZipUrl: ${KRAKOW_GTFS_STATIC_URL:-}
             GtfsFeeds__1__VehiclePositionsPbUrl: ${KRAKOW_GTFS_RT_VEHICLES_URL:-}
+            GtfsFeeds__2__CityId: grodzisk
+            GtfsFeeds__2__CityName: Grodzisk Mazowiecki (GPA)
+            GtfsFeeds__2__AgencyId: GPA
+            GtfsFeeds__2__StaticZipUrl: ${GRODZISK_GTFS_STATIC_URL:-}
+            GtfsFeeds__2__VehiclePositionsPbUrl: ${GRODZISK_GTFS_RT_VEHICLES_URL:-}
+            GtfsFeeds__2__KiedyPrzyjedzieBaseUrl: ${GPA_KIEDYPRZYJEDZIE_BASE_URL:-https://gpa.kiedyprzyjedzie.pl}
         restart: unless-stopped

@@ -241,6 +241,43 @@ public sealed class TransitStateStore
                 ("tram:ga_1072", "6", "3", 18.6250, 54.3690, 320, "PESA Jazz Duo 128NG", 2020, "GAiT Gdańsk")
             ]
         );
+
+        SeedCity(
+            id: "grodzisk",
+            name: "Grodzisk Mazowiecki (GPA)",
+            description: "Grodziskie Przewozy Autobusowe · WKD",
+            lon: 20.6252,
+            lat: 52.1097,
+            agencyId: "GPA",
+            agencyName: "Grodziskie Przewozy Autobusowe",
+            dataSources:
+            [
+                new DataSourceInfo("officialGPS", "GPA KiedyPrzyjedzie", "https://gpa.kiedyprzyjedzie.pl/"),
+                new DataSourceInfo("officialGTFS", "WKD (mkuran.pl)", "https://mkuran.pl/gtfs/wkd.zip")
+            ],
+            routes:
+            [
+                new RouteTuple("13", "grodzisk", "13", "Grodzisk Maz. Dw. PKP — Błonie PKP", "GPA", VehicleType.Bus, "#c60010"),
+                new RouteTuple("23", "grodzisk", "23", "Grodzisk Maz. Dw. PKP — Siestrzeń", "GPA", VehicleType.Bus, "#c60010"),
+                new RouteTuple("31", "grodzisk", "31", "Petrykozy — Grodzisk Maz. Dw. PKP", "GPA", VehicleType.Bus, "#c60010"),
+                new RouteTuple("32", "grodzisk", "32", "Żelechów — Grodzisk Maz. Dw. PKP", "GPA", VehicleType.Bus, "#c60010"),
+                new RouteTuple("60", "grodzisk", "60", "Grodzisk Maz. Dw. PKP — Warszawa P+R Al. Krakowska", "GPA", VehicleType.Bus, "#c60010"),
+                new RouteTuple("63", "grodzisk", "63", "Grodzisk Maz. Dw. PKP — Otrębusy WKD", "GPA", VehicleType.Bus, "#c60010")
+            ],
+            stops:
+            [
+                ("538522:585919", "Grodzisk Maz. Dw. PKP", "1204101", 20.622327, 52.109692, "Centrum / Dw. PKP"),
+                ("538522:2490966", "Grodzisk Maz. Dw. PKP 02", "320020283", 20.625226, 52.110327, "Otrębusy WKD"),
+                ("538564:585989", "Grodzisk Maz. Traugutta Dw. PKP", "1208101", 20.621405, 52.110773, "Szpital"),
+                ("538483:585844", "Adamowizna Królicza", "1200101", 20.632442, 52.072347, "Grodzisk Maz. Dw. PKP")
+            ],
+            vehicles:
+            [
+                ("bus:gpa_312", "31", "312", 20.6324, 52.0850, 345, "Solaris Urbino 10.5", 2022, "GPA Grodzisk Mazowiecki"),
+                ("bus:gpa_323", "32", "326", 20.6250, 52.1085, 328, "Mercedes-Benz Sprinter City", 2021, "GPA Grodzisk Mazowiecki"),
+                ("bus:gpa_601", "60", "601", 20.6750, 52.1210, 75, "SOR CN 12", 2023, "GPA Grodzisk Mazowiecki")
+            ]
+        );
     }
 
     private void SeedCity(

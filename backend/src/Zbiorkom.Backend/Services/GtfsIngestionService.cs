@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Text;
+using System.Text.Json;
 using ProtoBuf;
 using Zbiorkom.Backend.Models;
 
@@ -78,6 +80,7 @@ public sealed class GtfsFeedConfig
     public string AgencyId { get; set; } = "default";
     public string? StaticZipUrl { get; set; }
     public string? VehiclePositionsPbUrl { get; set; }
+    public string? KiedyPrzyjedzieBaseUrl { get; set; }
 }
 
 public static class GtfsFeedParser
@@ -209,6 +212,273 @@ public static class GtfsFeedParser
         return updatedCount;
     }
 
+    public static int LoadKiedyPrzyjedzieStopsIntoCity(string json, CityTransitData cityData)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("stops", out var stopsArray) || stopsArray.ValueKind != JsonValueKind.Array)
+            return 0;
+
+        var defaultRoutes = cityData.Routes.Values.Take(4).ToList();
+        var defaultTypes = defaultRoutes.Select(r => r.Type).Distinct().DefaultIfEmpty(VehicleType.Bus).ToList();
+        var count = 0;
+
+        foreach (var item in stopsArray.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Array || item.GetArrayLength() < 5)
+                continue;
+
+            var placeId = item[0].GetString() ?? "";
+            var designator = item[1].ValueKind == JsonValueKind.Number ? item[1].GetInt64().ToString() : (item[1].GetString() ?? "");
+            var name = item[2].GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(placeId) || string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var lonMicro = item[3].GetDouble();
+            var latMicro = item[4].GetDouble();
+            var lon = Math.Round(lonMicro / 1_000_000.0, 6);
+            var lat = Math.Round(latMicro / 1_000_000.0, 6);
+
+            cityData.Stops[placeId] = new StopTuple(
+                Id: placeId,
+                City: cityData.City.Id,
+                Name: name,
+                Code: designator,
+                Longitude: lon,
+                Latitude: lat,
+                Types: defaultTypes,
+                Bearing: 0,
+                Direction: "",
+                Routes: defaultRoutes
+            );
+            count++;
+        }
+
+        return count;
+    }
+
+    public static IReadOnlyList<(string LineName, string TripExecutionId, int TripIndex, string Direction)> ParseKiedyPrzyjedzieDepartures(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var directions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (root.TryGetProperty("directions", out var dirElement) && dirElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in dirElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.String)
+                    directions[prop.Name] = prop.Value.GetString() ?? "";
+            }
+        }
+
+        var results = new List<(string LineName, string TripExecutionId, int TripIndex, string Direction)>();
+        var seenExecutions = new HashSet<string>(StringComparer.Ordinal);
+
+        void ExtractRows(JsonElement rowsEl)
+        {
+            if (rowsEl.ValueKind != JsonValueKind.Array) return;
+            foreach (var row in rowsEl.EnumerateArray())
+            {
+                var isEstimated = row.TryGetProperty("is_estimated", out var estEl) && estEl.ValueKind == JsonValueKind.True;
+                var execId = row.TryGetProperty("trip_execution_id", out var execEl) && execEl.ValueKind == JsonValueKind.String
+                    ? execEl.GetString()
+                    : null;
+                if (!isEstimated || string.IsNullOrWhiteSpace(execId) || !seenExecutions.Add(execId))
+                    continue;
+
+                var lineName = row.TryGetProperty("line_name", out var lineEl) && lineEl.ValueKind == JsonValueKind.String
+                    ? (lineEl.GetString() ?? "?")
+                    : "?";
+                var tripIndex = row.TryGetProperty("trip_index", out var idxEl) && idxEl.ValueKind == JsonValueKind.Number
+                    ? idxEl.GetInt32()
+                    : 0;
+                var dirId = row.TryGetProperty("direction_id", out var dirIdEl)
+                    ? dirIdEl.ToString()
+                    : "";
+                var direction = directions.GetValueOrDefault(dirId, "");
+
+                results.Add((lineName, execId, tripIndex, direction));
+            }
+        }
+
+        if (root.TryGetProperty("rows", out var directRows))
+        {
+            ExtractRows(directRows);
+        }
+        else if (root.TryGetProperty("departures", out var depArray) && depArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var stopDep in depArray.EnumerateArray())
+            {
+                if (stopDep.TryGetProperty("rows", out var stopRows))
+                    ExtractRows(stopRows);
+            }
+        }
+
+        return results;
+    }
+
+    public static bool LoadKiedyPrzyjedzieTripExecutionIntoCity(
+        string json,
+        string tripExecutionId,
+        string fallbackLineName,
+        string fallbackDirection,
+        string agencyId,
+        CityTransitData cityData)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        if (!root.TryGetProperty("vehicle", out var vehicleEl) || vehicleEl.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!vehicleEl.TryGetProperty("lon", out var lonEl) || !vehicleEl.TryGetProperty("lat", out var latEl))
+            return false;
+        if (lonEl.ValueKind != JsonValueKind.Number || latEl.ValueKind != JsonValueKind.Number)
+            return false;
+
+        var lon = Math.Round(lonEl.GetDouble(), 6);
+        var lat = Math.Round(latEl.GetDouble(), 6);
+
+        var lineName = fallbackLineName;
+        var direction = fallbackDirection;
+        var itineraryStops = new List<ItineraryStopTuple>();
+        var shapeCoords = new List<(double Lat, double Lon)>();
+
+        if (root.TryGetProperty("trip", out var tripEl) && tripEl.ValueKind == JsonValueKind.Object)
+        {
+            if (tripEl.TryGetProperty("line", out var lEl) && lEl.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(lEl.GetString()))
+                lineName = lEl.GetString()!;
+            if (tripEl.TryGetProperty("direction", out var dEl) && dEl.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(dEl.GetString()))
+                direction = dEl.GetString()!;
+
+            if (tripEl.TryGetProperty("times", out var timesEl) && timesEl.ValueKind == JsonValueKind.Array)
+            {
+                var idx = 0;
+                foreach (var tItem in timesEl.EnumerateArray())
+                {
+                    var placeId = tItem.TryGetProperty("place_id", out var pEl) && pEl.ValueKind == JsonValueKind.String
+                        ? (pEl.GetString() ?? "")
+                        : "";
+                    var stopName = tItem.TryGetProperty("stop_name", out var snEl) && snEl.ValueKind == JsonValueKind.String
+                        ? (snEl.GetString() ?? "")
+                        : "";
+                    var designator = tItem.TryGetProperty("designator", out var desEl)
+                        ? desEl.ToString()
+                        : "";
+
+                    if (!cityData.Stops.TryGetValue(placeId, out var stopTuple))
+                    {
+                        stopTuple = new StopTuple(
+                            Id: string.IsNullOrWhiteSpace(placeId) ? $"kp_stop_{idx}" : placeId,
+                            City: cityData.City.Id,
+                            Name: string.IsNullOrWhiteSpace(stopName) ? $"Stop {idx}" : stopName,
+                            Code: designator,
+                            Longitude: lon,
+                            Latitude: lat,
+                            Types: [VehicleType.Bus],
+                            Bearing: 0,
+                            Direction: direction,
+                            Routes: []
+                        );
+                    }
+                    else
+                    {
+                        shapeCoords.Add((stopTuple.Latitude, stopTuple.Longitude));
+                    }
+
+                    itineraryStops.Add(new ItineraryStopTuple(
+                        Stop: stopTuple,
+                        AlightFlags: 1,
+                        Distance: idx * 950.0,
+                        Platform: designator
+                    ));
+                    idx++;
+                }
+            }
+        }
+
+        if (!cityData.Routes.TryGetValue(lineName, out var route))
+        {
+            route = new RouteTuple(
+                Id: lineName,
+                City: cityData.City.Id,
+                Name: lineName,
+                LongName: string.IsNullOrWhiteSpace(direction) ? lineName : direction,
+                Agency: agencyId,
+                Type: VehicleType.Bus,
+                Color: "#c60010"
+            );
+            cityData.Routes[lineName] = route;
+        }
+
+        // Extract brigade/vehicle code from e.g. "A 312 (31):739903:11"
+        var colonIdx = tripExecutionId.IndexOf(':');
+        var rawLabel = colonIdx > 0 ? tripExecutionId[..colonIdx].Trim() : tripExecutionId;
+        var parenIdx = rawLabel.IndexOf('(');
+        if (parenIdx > 0)
+            rawLabel = rawLabel[..parenIdx].Trim();
+        if (rawLabel.StartsWith("A ", StringComparison.OrdinalIgnoreCase))
+            rawLabel = rawLabel[2..].Trim();
+
+        var sanitizedId = string.Concat(rawLabel.Where(char.IsLetterOrDigit));
+        if (string.IsNullOrWhiteSpace(sanitizedId))
+            sanitizedId = Math.Abs(tripExecutionId.GetHashCode()).ToString();
+
+        var fullVehicleId = $"bus:gpa_{sanitizedId}";
+        var tripId = $"trip_kp_{sanitizedId}_{lineName}";
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var vehicleTripIndex = root.TryGetProperty("vehicle_trip_index", out var vtiEl) && vtiEl.ValueKind == JsonValueKind.Number
+            ? vtiEl.GetInt32()
+            : 0;
+        var totalStops = Math.Max(1, itineraryStops.Count);
+        var pct = Math.Clamp(Math.Round((vehicleTripIndex / (double)totalStops) * 100.0, 1), 0.0, 100.0);
+
+        cityData.Vehicles[fullVehicleId] = new VehicleTuple(
+            Id: fullVehicleId,
+            City: cityData.City.Id,
+            Route: route,
+            Brigade: rawLabel,
+            Longitude: lon,
+            Latitude: lat,
+            Bearing: 0,
+            LastPing: nowMs,
+            TripId: tripId,
+            PercentTraveled: pct,
+            Carrier: "GPA Grodzisk Mazowiecki"
+        );
+
+        var firstStop = itineraryStops.FirstOrDefault()?.Stop;
+        var lastStop = itineraryStops.LastOrDefault()?.Stop;
+
+        cityData.Trips[tripId] = new TripTuple(
+            Id: tripId,
+            City: cityData.City.Id,
+            Route: route,
+            Headsign: string.IsNullOrWhiteSpace(direction) ? (lastStop?.Name ?? route.LongName) : direction,
+            Brigade: rawLabel,
+            ShortName: route.Name,
+            Description: [("operator", "Grodziskie Przewozy Autobusowe"), ("source", "gpa.kiedyprzyjedzie.pl")],
+            FirstStop: firstStop is not null ? (firstStop.Name, nowMs - 600_000) : null,
+            LastStop: lastStop is not null ? (lastStop.Name, nowMs + 1_200_000) : null,
+            Distance: itineraryStops.Count * 950.0
+        );
+
+        if (itineraryStops.Count > 0)
+        {
+            cityData.TripItineraries[tripId] = itineraryStops;
+        }
+        if (shapeCoords.Count >= 2)
+        {
+            cityData.TripEncodedShapes[tripId] = PolylineEncoder.Encode6(shapeCoords);
+        }
+
+        return true;
+    }
+
+    public static string EncodeTripExecutionIdBase64(string tripExecutionId)
+        => Convert.ToBase64String(Encoding.UTF8.GetBytes(tripExecutionId));
+
     public static IEnumerable<Dictionary<string, string>> ReadCsvRows(TextReader reader)
     {
         var headerLine = reader.ReadLine();
@@ -277,55 +547,127 @@ public sealed class GtfsIngestionWorker(
 
         foreach (var feed in feeds)
         {
-            if (string.IsNullOrWhiteSpace(feed.CityId) || string.IsNullOrWhiteSpace(feed.StaticZipUrl))
+            if (string.IsNullOrWhiteSpace(feed.CityId))
                 continue;
 
-            try
+            var cityData = store.GetCity(feed.CityId);
+            if (cityData is null) continue;
+
+            if (!string.IsNullOrWhiteSpace(feed.StaticZipUrl))
             {
-                var cityData = store.GetCity(feed.CityId);
-                if (cityData is null) continue;
+                try
+                {
+                    var client = httpClientFactory.CreateClient("GtfsClient");
+                    await using var stream = await client.GetStreamAsync(feed.StaticZipUrl, stoppingToken);
+                    using var ms = new MemoryStream();
+                    await stream.CopyToAsync(ms, stoppingToken);
+                    ms.Position = 0;
 
-                var client = httpClientFactory.CreateClient("GtfsClient");
-                await using var stream = await client.GetStreamAsync(feed.StaticZipUrl, stoppingToken);
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, stoppingToken);
-                ms.Position = 0;
-
-                GtfsFeedParser.LoadStaticZipIntoCity(ms, cityData, feed.AgencyId);
-                logger.LogInformation("Loaded GTFS static feed for {CityId}", feed.CityId);
+                    GtfsFeedParser.LoadStaticZipIntoCity(ms, cityData, feed.AgencyId);
+                    logger.LogInformation("Loaded GTFS static feed for {CityId}", feed.CityId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to load optional GTFS static feed for {CityId}", feed.CityId);
+                }
             }
-            catch (Exception ex)
+
+            if (!string.IsNullOrWhiteSpace(feed.KiedyPrzyjedzieBaseUrl))
             {
-                logger.LogWarning(ex, "Failed to load optional GTFS static feed for {CityId}", feed.CityId);
+                try
+                {
+                    var baseUrl = feed.KiedyPrzyjedzieBaseUrl.TrimEnd('/');
+                    var client = httpClientFactory.CreateClient("GtfsClient");
+                    var stopsJson = await client.GetStringAsync($"{baseUrl}/stops?rev=1", stoppingToken);
+                    var stopCount = GtfsFeedParser.LoadKiedyPrzyjedzieStopsIntoCity(stopsJson, cityData);
+                    logger.LogInformation("Loaded {StopCount} KiedyPrzyjedzie stops for {CityId} from {BaseUrl}", stopCount, feed.CityId, baseUrl);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to load KiedyPrzyjedzie stops for {CityId}", feed.CityId);
+                }
             }
         }
 
+        var tickCount = 0;
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
+            tickCount++;
             store.AdvanceSimulationTick();
 
             foreach (var feed in feeds)
             {
-                if (string.IsNullOrWhiteSpace(feed.CityId) || string.IsNullOrWhiteSpace(feed.VehiclePositionsPbUrl))
+                if (string.IsNullOrWhiteSpace(feed.CityId))
                     continue;
 
-                try
-                {
-                    var cityData = store.GetCity(feed.CityId);
-                    if (cityData is null) continue;
+                var cityData = store.GetCity(feed.CityId);
+                if (cityData is null) continue;
 
-                    var client = httpClientFactory.CreateClient("GtfsClient");
-                    await using var pbStream = await client.GetStreamAsync(feed.VehiclePositionsPbUrl, stoppingToken);
-                    var count = GtfsFeedParser.LoadVehiclePositionsProtobufIntoCity(pbStream, cityData);
-                    if (count > 0)
+                if (!string.IsNullOrWhiteSpace(feed.VehiclePositionsPbUrl))
+                {
+                    try
                     {
-                        store.NotifyCityUpdated(feed.CityId);
+                        var client = httpClientFactory.CreateClient("GtfsClient");
+                        await using var pbStream = await client.GetStreamAsync(feed.VehiclePositionsPbUrl, stoppingToken);
+                        var count = GtfsFeedParser.LoadVehiclePositionsProtobufIntoCity(pbStream, cityData);
+                        if (count > 0)
+                        {
+                            store.NotifyCityUpdated(feed.CityId);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex, "Optional GTFS-RT poll skipped for {CityId}", feed.CityId);
                     }
                 }
-                catch (Exception ex)
+
+                // Poll KiedyPrzyjedzie live departures & GPS trip_execution every ~15 seconds (every 5th tick)
+                if (!string.IsNullOrWhiteSpace(feed.KiedyPrzyjedzieBaseUrl) && tickCount % 5 == 1)
                 {
-                    logger.LogDebug(ex, "Optional GTFS-RT poll skipped for {CityId}", feed.CityId);
+                    try
+                    {
+                        var baseUrl = feed.KiedyPrzyjedzieBaseUrl.TrimEnd('/');
+                        var client = httpClientFactory.CreateClient("GtfsClient");
+                        var hubPlaces = cityData.Stops.Keys
+                            .Where(k => k.Contains(':'))
+                            .Take(8)
+                            .ToList();
+
+                        if (hubPlaces.Count > 0)
+                        {
+                            var placesParam = Uri.EscapeDataString(string.Join(",", hubPlaces));
+                            var depJson = await client.GetStringAsync($"{baseUrl}/api/departures?places={placesParam}", stoppingToken);
+                            var activeTrips = GtfsFeedParser.ParseKiedyPrzyjedzieDepartures(depJson);
+                            var updated = 0;
+
+                            foreach (var active in activeTrips.Take(10))
+                            {
+                                var encodedExecId = Uri.EscapeDataString(GtfsFeedParser.EncodeTripExecutionIdBase64(active.TripExecutionId));
+                                var execUrl = $"{baseUrl}/api/trip_execution/{encodedExecId}/{active.TripIndex}";
+                                var execJson = await client.GetStringAsync(execUrl, stoppingToken);
+                                if (GtfsFeedParser.LoadKiedyPrzyjedzieTripExecutionIntoCity(
+                                        execJson,
+                                        active.TripExecutionId,
+                                        active.LineName,
+                                        active.Direction,
+                                        feed.AgencyId,
+                                        cityData))
+                                {
+                                    updated++;
+                                }
+                            }
+
+                            if (updated > 0)
+                            {
+                                store.NotifyCityUpdated(feed.CityId);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex, "Optional KiedyPrzyjedzie poll skipped for {CityId}", feed.CityId);
+                    }
                 }
             }
         }

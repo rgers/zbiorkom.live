@@ -23,11 +23,16 @@ curl http://localhost:8005/healthz
 curl http://localhost:8005/api6
 ```
 
-### Optional: Connect Live Upstream GTFS / GTFS-Realtime Feeds
+### Optional: Connect Live Upstream GTFS / GTFS-Realtime / KiedyPrzyjedzie Feeds
 
-You can pass upstream GTFS Static (`.zip`) and GTFS-Realtime VehiclePositions (`.pb`) URLs via environment variables when launching Docker Compose:
+By default, `docker compose up --build` connects **Grodzisk Mazowiecki (GPA)** directly to `https://gpa.kiedyprzyjedzie.pl` (without using `zbiorkom.live`).
+
+You can also pass upstream GTFS Static (`.zip`), GTFS-Realtime VehiclePositions (`.pb`), or KiedyPrzyjedzie URLs via environment variables when launching Docker Compose:
 
 ```bash
+GPA_KIEDYPRZYJEDZIE_BASE_URL="https://gpa.kiedyprzyjedzie.pl" \
+GRODZISK_GTFS_STATIC_URL="https://mkuran.pl/gtfs/wkd.zip" \
+GRODZISK_GTFS_RT_VEHICLES_URL="https://mkuran.pl/gtfs/wkd.pb" \
 KRAKOW_GTFS_STATIC_URL="https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip" \
 KRAKOW_GTFS_RT_VEHICLES_URL="https://gtfs.ztp.krakow.pl/VehiclePositions_T.pb" \
 docker compose up --build
