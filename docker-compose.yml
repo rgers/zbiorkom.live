@@ -1,0 +1,23 @@
+services:
+    backend:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+        container_name: zbiorkom-backend
+        ports:
+            - "${BACKEND_PORT:-8005}:8005"
+        environment:
+            ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+            ASPNETCORE_URLS: http://+:8005
+            # Optional upstream GTFS / GTFS-Realtime feeds (override in .env or shell):
+            GtfsFeeds__0__CityId: warsaw
+            GtfsFeeds__0__CityName: Warszawa
+            GtfsFeeds__0__AgencyId: WTP
+            GtfsFeeds__0__StaticZipUrl: ${WARSAW_GTFS_STATIC_URL:-}
+            GtfsFeeds__0__VehiclePositionsPbUrl: ${WARSAW_GTFS_RT_VEHICLES_URL:-}
+            GtfsFeeds__1__CityId: krakow
+            GtfsFeeds__1__CityName: Kraków
+            GtfsFeeds__1__AgencyId: ZTP
+            GtfsFeeds__1__StaticZipUrl: ${KRAKOW_GTFS_STATIC_URL:-}
+            GtfsFeeds__1__VehiclePositionsPbUrl: ${KRAKOW_GTFS_RT_VEHICLES_URL:-}
+        restart: unless-stopped

@@ -26,7 +26,7 @@ public sealed class TransitStateStore
         SeedDefaultCities();
     }
 
-    public IReadOnlyCollection<CityDto> GetCities()
+    public IReadOnlyList<CityDto> GetCities()
         => _cities.Values.Select(c => c.City).OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
 
     public CityTransitData? GetCity(string cityId)

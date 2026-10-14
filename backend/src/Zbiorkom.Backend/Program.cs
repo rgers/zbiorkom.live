@@ -30,6 +30,12 @@ builder.Services.AddHostedService<GtfsIngestionWorker>();
 var app = builder.Build();
 app.UseCors();
 
+app.MapGet("/healthz", (TransitStateStore store) => Results.Ok(new
+{
+    status = "healthy",
+    cities = store.GetCities().Count
+}));
+
 app.MapGet("/api6", (TransitStateStore store) =>
 {
     var cities = store.GetCities();
