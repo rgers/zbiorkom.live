@@ -15,11 +15,12 @@ i18n.use(initReactI18next).init({
     fallbackLng: "pl",
 });
 
-const useLocalhost = location.protocol === "http:" && false;
+const envApiBase = import.meta.env.VITE_API_BASE;
+const envCloudBase = import.meta.env.VITE_CLOUD_API_BASE;
 
 window.Gay = {
-    base: useLocalhost ? "http://localhost:8005" : "https://api.zbiorkom.live",
-    cloudBase: "https://4.zbiorkom.live",
+    base: envApiBase || "https://api.zbiorkom.live",
+    cloudBase: envCloudBase || "https://4.zbiorkom.live",
 };
 
 console.log(
